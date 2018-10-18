@@ -12,6 +12,7 @@ import (
 	"github.com/goharbor/harbor/src/jobservice/errs"
 	"github.com/goharbor/harbor/src/jobservice/job"
 	"github.com/goharbor/harbor/src/jobservice/logger"
+	"github.com/goharbor/harbor/src/jobservice/models"
 	"github.com/goharbor/harbor/src/jobservice/opm"
 
 	"github.com/goharbor/harbor/src/jobservice/tests"
@@ -33,15 +34,16 @@ func TestRegisterJob(t *testing.T) {
 		t.Error(err)
 	}
 
-	jobs := make(map[string]interface{})
-	jobs["fake_job_1st"] = (*fakeJob)(nil)
-	jobs["fake_job_2nd"] = (*fakeJob)(nil)
-	if err := wp.RegisterJobs(jobs); err != nil {
-		t.Error(err)
-	}
-
 	if _, ok := wp.IsKnownJob("fake_job"); !ok {
 		t.Error("expect known job but seems failed to register job 'fake_job'")
+	}
+
+	delete(wp.knownJobs, "fake_job")
+
+	jobs := make(map[string]interface{})
+	jobs["fake_job_1st"] = (*fakeJob)(nil)
+	if err := wp.RegisterJobs(jobs); err != nil {
+		t.Error(err)
 	}
 
 	params := make(map[string]interface{})
@@ -324,6 +326,9 @@ type fakeContext struct {
 	// checkin func
 	checkInFunc job.CheckInFunc
 
+	// launch job
+	launchJobFunc job.LaunchJobFunc
+
 	// other required information
 	properties map[string]interface{}
 }
@@ -373,6 +378,18 @@ func (c *fakeContext) Build(dep env.JobData) (env.JobContext, error) {
 		return nil, errors.New("failed to inject checkInFunc")
 	}
 
+	if launchJobFunc, ok := dep.ExtraData["launchJobFunc"]; ok {
+		if reflect.TypeOf(launchJobFunc).Kind() == reflect.Func {
+			if funcRef, ok := launchJobFunc.(job.LaunchJobFunc); ok {
+				jContext.launchJobFunc = funcRef
+			}
+		}
+	}
+
+	if jContext.launchJobFunc == nil {
+		return nil, errors.New("failed to inject launchJobFunc")
+	}
+
 	return jContext, nil
 }
 
@@ -410,4 +427,13 @@ func (c *fakeContext) OPCommand() (string, bool) {
 // GetLogger returns the logger
 func (c *fakeContext) GetLogger() logger.Interface {
 	return nil
+}
+
+// LaunchJob launches sub jobs
+func (c *fakeContext) LaunchJob(req models.JobRequest) (models.JobStats, error) {
+	if c.launchJobFunc == nil {
+		return models.JobStats{}, errors.New("nil launch job function")
+	}
+
+	return c.launchJobFunc(req)
 }
